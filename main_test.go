@@ -365,6 +365,40 @@ func TestDownloadCompleteOverlapsAsInstalled(t *testing.T) {
 	}
 }
 
+func TestStatusOverlapsCompletedDownloadAsInstalled(t *testing.T) {
+	root := setupRoot(t)
+	writeFakeStudio(t, 0, "")
+	newFakeHf(t, `[{"id":"org/tiny"}]`, `[{"path":"tiny.gguf","type":"file","size":262144}]`, downloadHandler(262144, 65536, 0))
+	dest := filepath.Join(root, "llama-cpp")
+
+	start := runHelper(t, "download", "start", "--repo", "org/tiny", "--file", "tiny.gguf", "--dest", dest)
+	if start.ExitCode != 0 {
+		t.Fatalf("start: %s", start.Stdout)
+	}
+	sc := filepath.Join(dest, "tiny.gguf.download.json")
+	pollSidecar(t, sc, 15*time.Second, func(m map[string]any) bool { return m["state"] == "completed" })
+
+	r := runHelper(t, "status", "--profile", "local-models")
+	if r.ExitCode != 0 {
+		t.Fatalf("status: %s / %s", r.Stdout, r.Stderr)
+	}
+	data := dataMap(t, r)
+	catalog := data["catalog"].([]any)
+	if len(catalog) != 1 {
+		t.Fatalf("catalog: %s", r.Stdout)
+	}
+	entry := catalog[0].(map[string]any)
+	if entry["installed"] != true {
+		t.Fatalf("entrada deveria estar instalada na leitura composta: %s", r.Stdout)
+	}
+	if entry["download"] != nil {
+		t.Fatalf("trabalho concluido e ja instalado deve ficar invisivel na leitura composta: %s", r.Stdout)
+	}
+	if len(data["installed"].([]any)) != 1 || data["hasInstalled"] != true {
+		t.Fatalf("inventario da leitura composta: %s", r.Stdout)
+	}
+}
+
 func TestDownloadStartRefusesDuplicate(t *testing.T) {
 	root := setupRoot(t)
 	newFakeHf(t, `[{"id":"org/tiny"}]`, `[{"path":"tiny.gguf","type":"file","size":50000000}]`, downloadHandler(50000000, 65536, 20*time.Millisecond))

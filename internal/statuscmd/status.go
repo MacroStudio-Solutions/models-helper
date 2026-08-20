@@ -91,6 +91,13 @@ func Build() contract.TLocalModelsStatus {
 	if err != nil {
 		installed = []contract.TInstalledModel{}
 	}
+	if catalogEntries == nil {
+		catalogEntries = []contract.TCatalogEntry{}
+	}
+	for i := range catalogEntries {
+		catalogEntries[i].Installed = fileExists(filepath.Join(modelsDir, catalogEntries[i].File))
+	}
+
 	collected := jobs.Collect(paths.ModelsRoot())
 	for _, c := range collected {
 		jobs.Reap(c)
@@ -98,12 +105,8 @@ func Build() contract.TLocalModelsStatus {
 	}
 	byFile := jobs.LatestByFile(collected, modelsDir)
 
-	if catalogEntries == nil {
-		catalogEntries = []contract.TCatalogEntry{}
-	}
 	for i := range catalogEntries {
 		entry := &catalogEntries[i]
-		entry.Installed = fileExists(filepath.Join(modelsDir, entry.File))
 		var dl *contract.TDownloadJob
 		if j := byFile[entry.File]; j != nil {
 			if j.State == contract.JobStateCompleted && entry.Installed {
