@@ -105,6 +105,35 @@ go vet ./...
 go test ./...
 ```
 
-A esteira de compilação cruzada (`linux-x64-gnu`, `linux-arm64-gnu`,
-`win32-x64`), release no GitHub e soma de verificação por artefato é entregue
-em etapa própria, seguindo o formato de distribuição do `wa-control`.
+## Distribuição e esteira de release
+
+Ajudante distribuído como artefato de runtime pinado por sha256, seguindo o
+formato de distribuição do `wa-control`: release do GitHub como canal, chaves
+de plataforma canônicas `linux-x64-gnu`, `linux-arm64-gnu` e `win32-x64`.
+
+| Comando | Papel |
+|---|---|
+| `bash scripts/build-release.sh all` | Compila `linux-x64`, `linux-arm64` e `windows-x64` em um único comando (cross-compile Go, `CGO_ENABLED=0`) |
+| `bash scripts/release.sh` | Valida semver do `VERSION`, exige árvore limpa, compila as três plataformas, confere o limite de 512 MB por artefato, cria a tag e publica a release no GitHub |
+| `bash scripts/manifest-fragment.sh` | Baixa cada artefato da release publicada, calcula sha256 e tamanho dos bytes baixados e emite `dist/manifest-fragment-v<versão>.json` com as chaves canônicas, pronto para colar no manifest das extensões |
+
+Releases do GitHub não publicam soma de verificação: o sha256 e o tamanho são
+calculados por artefato baixado, na preparação de cada manifesto — nunca do
+arquivo local de build.
+
+Layout dos artefatos: tar.gz com pasta de topo versionada no Linux
+(`models-helper-v<versão>-<plataforma>/models-helper`, igual ao `wa-control`) e
+zip plano no Windows (`models-helper.exe` na raiz, como os zips do llama). O
+entry point declarado no manifest precisa refletir esse layout por artefato.
+
+Estado de validação declarado por plataforma:
+
+- `linux-x64-gnu`: compilado e validado em máquina real.
+- `linux-arm64-gnu`: cross-compile, sem execução em máquina real.
+- `win32-x64`: **declarado-não-validado** — cross-compile sem máquina Windows
+  real; a extensão que declara o artefato registra o mesmo estado em vez de
+  afirmar suporte validado.
+
+A versão publicada é semver válida (arquivo `VERSION`) e precisa ser declarada
+identicamente pelas duas extensões (`local-models` e `local-transcription`)
+para manter a resolução de runtime sem ambiguidade.
