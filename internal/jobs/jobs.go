@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/MacroStudio-Solutions/models-helper/internal/contract"
+	"github.com/MacroStudio-Solutions/models-helper/internal/format"
 )
 
 type TJobFile struct {
@@ -166,4 +167,15 @@ func CancelMarkerExists(destDir string, file string) bool {
 		return true
 	}
 	return false
+}
+
+// Snapshot e a unica forma de tirar um TDownloadJob de um arquivo lateral.
+// Existe para que nenhum ponto de leitura possa esquecer os rotulos: quem
+// copiasse a struct direto devolveria bytes crus para a tela imprimir.
+func Snapshot(j *TJobFile) contract.TDownloadJob {
+	job := j.TDownloadJob
+	job.ReceivedLabel = format.Bytes(job.ReceivedBytes)
+	job.TotalLabel = format.Bytes(job.TotalBytes)
+	job.ProgressLabel = format.Transfer(job.ReceivedBytes, job.TotalBytes)
+	return job
 }

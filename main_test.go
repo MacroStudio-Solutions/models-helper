@@ -694,3 +694,265 @@ func TestDownloadUnknownSizeIsNamedError(t *testing.T) {
 		t.Fatalf("tamanho desconhecido deve ser erro nomeado: %s", r.Stdout)
 	}
 }
+
+// newFakeHub responde a arvore de qualquer repositorio com o mesmo conteudo,
+// que e o que permite exercitar a vitrine editorial: ela pergunta por nove
+// repositorios reais, e o teste nao deve depender do nome de nenhum deles.
+func newFakeHub(t *testing.T, files map[string]uint64) *httptest.Server {
+	t.Helper()
+	body := "["
+	first := true
+	for path, size := range files {
+		if !first {
+			body += ","
+		}
+		first = false
+		body += fmt.Sprintf(`{"path":%q,"type":"file","size":%d}`, path, size)
+	}
+	body += "]"
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/models", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[{"id":"org/tiny"},{"id":"org/huge"}]`)
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/tree/main") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, body)
+	})
+	ts := httptest.NewServer(mux)
+	t.Setenv("MODELS_HELPER_HF_API", ts.URL)
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func TestMachineCarriesReadableLabels(t *testing.T) {
+	setupRoot(t)
+	r := runHelper(t, "machine")
+	if r.ExitCode != 0 {
+		t.Fatalf("machine: %s", r.Stdout)
+	}
+	data := dataMap(t, r)
+	for _, k := range []string{"ramTotalLabel", "ramAvailableLabel", "cpuLabel", "gpuLabel", "vramLabel"} {
+		label, _ := data[k].(string)
+		if label == "" {
+			t.Fatalf("rotulo %s vazio: %s", k, r.Stdout)
+		}
+		if strings.Contains(label, "bytes") {
+			t.Fatalf("rotulo %s ainda esta cru: %q", k, label)
+		}
+	}
+}
+
+// O defeito que estes dois modos corrigem: a lista chegava so por popularidade,
+// entao a tela mostrava, em maquina comum, quase so modelo que nao roda.
+func TestCatalogListOrdersAndFiltersByFit(t *testing.T) {
+	setupRoot(t)
+	newFakeHub(t, map[string]uint64{
+		"tiny-Q4_K_M.gguf": 1000,
+	})
+
+	r := runHelper(t, "catalog", "list", "--limit", "5", "--sort", "fit", "--fit", "fits")
+	if r.ExitCode != 0 {
+		t.Fatalf("catalog list: %s / %s", r.Stdout, r.Stderr)
+	}
+	list := dataList(t, r)
+	if len(list) == 0 {
+		t.Fatalf("um modelo minusculo deve sobreviver ao filtro: %s", r.Stdout)
+	}
+	entry := list[0].(map[string]any)
+	for _, k := range []string{"fitRank", "fitLabel", "requiredLabel", "sizeLabel"} {
+		if _, ok := entry[k]; !ok {
+			t.Fatalf("campo %s ausente: %s", k, r.Stdout)
+		}
+	}
+	if entry["fitLabel"] == "" || entry["sizeLabel"] == "" {
+		t.Fatalf("rotulos vazios: %s", r.Stdout)
+	}
+
+	if r := runHelper(t, "catalog", "list", "--sort", "aleatorio"); r.ExitCode == 0 || errCode(t, r) != "INVALID_USAGE" {
+		t.Fatalf("ordem invalida deveria ser recusada: %s", r.Stdout)
+	}
+	if r := runHelper(t, "catalog", "list", "--fit", "talvez"); r.ExitCode == 0 || errCode(t, r) != "INVALID_USAGE" {
+		t.Fatalf("filtro invalido deveria ser recusado: %s", r.Stdout)
+	}
+}
+
+func TestCatalogCuratedCarriesEditorialText(t *testing.T) {
+	setupRoot(t)
+	newFakeHub(t, map[string]uint64{"tiny-Q4_K_M.gguf": 1000})
+
+	r := runHelper(t, "catalog", "curated")
+	if r.ExitCode != 0 {
+		t.Fatalf("catalog curated: %s / %s", r.Stdout, r.Stderr)
+	}
+	list := dataList(t, r)
+	if len(list) == 0 {
+		t.Fatalf("vitrine vazia: %s", r.Stdout)
+	}
+	for _, item := range list {
+		entry := item.(map[string]any)
+		if entry["summary"] == "" || entry["engine"] != "llama" {
+			t.Fatalf("entrada da vitrine sem texto editorial: %v", entry)
+		}
+	}
+}
+
+func TestInstalledReadsWhisperWeights(t *testing.T) {
+	setupRoot(t)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "ggml-base.bin"), make([]byte, 4096), 0644)
+	os.WriteFile(filepath.Join(dir, "modelo.gguf"), make([]byte, 4096), 0644)
+
+	r := runHelper(t, "installed", "--dir", dir, "--ext", ".bin", "--speech")
+	if r.ExitCode != 0 {
+		t.Fatalf("installed: %s", r.Stdout)
+	}
+	list := dataList(t, r)
+	if len(list) != 1 {
+		t.Fatalf("esperado apenas o peso .bin: %s", r.Stdout)
+	}
+	item := list[0].(map[string]any)
+	if item["name"] != "ggml-base.bin" || item["apiName"] != "ggml-base" {
+		t.Fatalf("inventario de transcricao errado: %s", r.Stdout)
+	}
+	if item["sizeLabel"] == "" {
+		t.Fatalf("rotulo de tamanho ausente: %s", r.Stdout)
+	}
+
+	if r := runHelper(t, "installed", "--dir", dir, "--ext", ".safetensors"); r.ExitCode == 0 {
+		t.Fatalf("extensao nao suportada deveria ser recusada: %s", r.Stdout)
+	}
+}
+
+func TestPresetLifecycle(t *testing.T) {
+	root := setupRoot(t)
+	dir := filepath.Join(root, "llama-cpp")
+	os.MkdirAll(dir, 0755)
+	model := filepath.Join(dir, "modelo.gguf")
+	os.WriteFile(model, make([]byte, 2048), 0644)
+
+	r := runHelper(t, "preset", "show")
+	if r.ExitCode != 0 || dataMap(t, r)["hasModel"] != false {
+		t.Fatalf("preset ausente deveria ser estado vazio: %s", r.Stdout)
+	}
+
+	r = runHelper(t, "preset", "set", "--model", model)
+	if r.ExitCode != 0 || dataMap(t, r)["hasModel"] != true {
+		t.Fatalf("preset set: %s / %s", r.Stdout, r.Stderr)
+	}
+	if dataMap(t, r)["alias"] != "studio-local" {
+		t.Fatalf("o apelido padrao deve continuar sendo studio-local: %s", r.Stdout)
+	}
+
+	r = runHelper(t, "preset", "clear")
+	if r.ExitCode != 0 || dataMap(t, r)["hasModel"] != false {
+		t.Fatalf("preset clear: %s", r.Stdout)
+	}
+
+	outside := filepath.Join(t.TempDir(), "alheio.gguf")
+	os.WriteFile(outside, make([]byte, 10), 0644)
+	if r := runHelper(t, "preset", "set", "--model", outside); r.ExitCode == 0 || errCode(t, r) != "DEST_OUTSIDE_MODELS_DIR" {
+		t.Fatalf("caminho externo deveria ser recusado: %s", r.Stdout)
+	}
+}
+
+func TestStatusRouterModeListsEveryModel(t *testing.T) {
+	root := setupRoot(t)
+	writeFakeStudio(t, 0, "")
+	newFakeHub(t, map[string]uint64{"tiny-Q4_K_M.gguf": 1000})
+	dir := filepath.Join(root, "llama-cpp")
+	os.MkdirAll(dir, 0755)
+	os.WriteFile(filepath.Join(dir, "modelo.gguf"), make([]byte, 2048), 0644)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[
+			{"id":"modelo","source":"models_dir","status":{"value":"loaded"}},
+			{"id":"studio-local","source":"preset","status":{"value":"unloaded"}}
+		]}`)
+	}))
+	defer srv.Close()
+	t.Setenv("MODELS_HELPER_SERVER_URL", srv.URL)
+
+	r := runHelper(t, "status", "--profile", "local-models")
+	if r.ExitCode != 0 || r.Env["ok"] != true {
+		t.Fatalf("status: %s / %s", r.Stdout, r.Stderr)
+	}
+	data := dataMap(t, r)
+	server := data["server"].(map[string]any)
+	if server["mode"] != "router" || server["modelCount"] != float64(2) || server["loadedCount"] != float64(1) {
+		t.Fatalf("estado do roteador errado: %s", r.Stdout)
+	}
+	installed := data["installed"].([]any)[0].(map[string]any)
+	if installed["apiName"] != "modelo" || installed["isLoaded"] != true {
+		t.Fatalf("o modelo instalado deveria aparecer carregado: %s", r.Stdout)
+	}
+	machineData := data["machine"].(map[string]any)
+	if machineData["ramTotalLabel"] == "" {
+		t.Fatalf("a maquina deve chegar formatada ao painel: %s", r.Stdout)
+	}
+}
+
+func TestStatusTranscriptionProfile(t *testing.T) {
+	root := setupRoot(t)
+	writeFakeStudio(t, 0, "")
+	newFakeHub(t, map[string]uint64{"ggml-parakeet-tdt-0.6b-v3-q8_0.bin": 668757119})
+	dir := filepath.Join(root, "whisper-cpp")
+	os.MkdirAll(dir, 0755)
+	os.WriteFile(filepath.Join(dir, "ggml-base.bin"), make([]byte, 4096), 0644)
+	os.WriteFile(filepath.Join(dir, ".server.json"), []byte(`{"model":"ggml-base.bin"}`), 0644)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	t.Setenv("MODELS_HELPER_TRANSCRIPTION_SERVER_URL", srv.URL)
+
+	r := runHelper(t, "status", "--profile", "local-transcription")
+	if r.ExitCode != 0 || r.Env["ok"] != true {
+		t.Fatalf("status de transcricao: %s / %s", r.Stdout, r.Stderr)
+	}
+	data := dataMap(t, r)
+
+	server := data["server"].(map[string]any)
+	if server["online"] != true || server["modelName"] != "ggml-base.bin" {
+		t.Fatalf("servidor de transcricao: %s", r.Stdout)
+	}
+
+	catalogList := data["catalog"].([]any)
+	if len(catalogList) == 0 {
+		t.Fatalf("catalogo fixo vazio: %s", r.Stdout)
+	}
+	first := catalogList[0].(map[string]any)
+	if first["recommended"] != true || first["engine"] != "parakeet" {
+		t.Fatalf("a recomendacao medida deve abrir a lista: %v", first)
+	}
+	if data["recommendedFile"] != "ggml-parakeet-tdt-0.6b-v3-q8_0.bin" {
+		t.Fatalf("arquivo recomendado errado: %s", r.Stdout)
+	}
+	if data["hasRecommended"] != false {
+		t.Fatalf("o recomendado nao esta instalado neste teste: %s", r.Stdout)
+	}
+
+	installed := data["installed"].([]any)
+	if len(installed) != 1 {
+		t.Fatalf("inventario de transcricao: %s", r.Stdout)
+	}
+	item := installed[0].(map[string]any)
+	if item["engine"] != "whisper" || item["isLoaded"] != true {
+		t.Fatalf("o modelo servido deveria aparecer carregado: %v", item)
+	}
+}
+
+func TestStatusRejectsAnUnknownProfile(t *testing.T) {
+	setupRoot(t)
+	r := runHelper(t, "status", "--profile", "inexistente")
+	if r.ExitCode == 0 || errCode(t, r) != "UNSUPPORTED_PROFILE" {
+		t.Fatalf("perfil desconhecido deveria ser erro nomeado: %s", r.Stdout)
+	}
+}

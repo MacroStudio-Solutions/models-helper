@@ -19,6 +19,13 @@ func ServerBaseUrl() string {
 	return "http://127.0.0.1:8081"
 }
 
+func TranscriptionServerBaseUrl() string {
+	if v := os.Getenv("MODELS_HELPER_TRANSCRIPTION_SERVER_URL"); v != "" {
+		return strings.TrimRight(v, "/")
+	}
+	return "http://127.0.0.1:8082"
+}
+
 func StudioBin() string {
 	if v := os.Getenv("MODELS_HELPER_STUDIO_BIN"); v != "" {
 		return v

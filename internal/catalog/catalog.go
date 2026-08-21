@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/MacroStudio-Solutions/models-helper/internal/contract"
 	"github.com/MacroStudio-Solutions/models-helper/internal/env"
 	"github.com/MacroStudio-Solutions/models-helper/internal/fit"
+	"github.com/MacroStudio-Solutions/models-helper/internal/format"
 	"github.com/MacroStudio-Solutions/models-helper/internal/paths"
 )
 
@@ -152,6 +154,13 @@ func (c *TClient) queryModels(ctx context.Context, key string, params url.Values
 }
 
 func (c *TClient) Tree(ctx context.Context, repoId string) ([]TTreeFile, error) {
+	return c.TreeOf(ctx, repoId, ".gguf")
+}
+
+// TreeOf lista os arquivos de peso de um repositorio. A extensao e parametro
+// porque o llama.cpp le .gguf e o whisper.cpp le .bin, e um catalogo de
+// transcricao que filtrasse por .gguf voltaria vazio.
+func (c *TClient) TreeOf(ctx context.Context, repoId string, suffix string) ([]TTreeFile, error) {
 	body, err := c.fetchCached(ctx, "tree:"+repoId, c.BaseURL+"/api/models/"+repoId+"/tree/main")
 	if err != nil {
 		return nil, contract.Errorf("CATALOG_UNAVAILABLE", "falha ao consultar versoes de %s: %v", repoId, err)
@@ -162,7 +171,7 @@ func (c *TClient) Tree(ctx context.Context, repoId string) ([]TTreeFile, error) 
 	}
 	var files []TTreeFile
 	for _, e := range raw {
-		if e.Type == "file" && strings.HasSuffix(e.Path, ".gguf") {
+		if e.Type == "file" && strings.HasSuffix(e.Path, suffix) {
 			files = append(files, TTreeFile{Path: e.Path, Size: e.Size})
 		}
 	}
@@ -211,6 +220,7 @@ func BuildEntry(model TModel, treeFile TTreeFile, machineProfile contract.TMachi
 		Quantization: token,
 		SizeBytes:    treeFile.Size,
 		SizeGb:       fit.SizeGb(treeFile.Size),
+		SizeLabel:    format.Bytes(treeFile.Size),
 		Installed:    fileExists(filepath.Join(modelsDir, treeFile.Path)),
 		Download:     nil,
 	}
@@ -267,4 +277,69 @@ func VersionEntries(ctx context.Context, c *TClient, repoId string, machineProfi
 func fileExists(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && !st.IsDir()
+}
+
+// ---- ordenacao e filtro por viabilidade ---------------------------------
+
+const (
+	SortFit        = "fit"
+	SortPopularity = "popularity"
+	SortSize       = "size"
+	FitAny         = "any"
+	FitFits        = "fits"
+	FitGpu         = "gpu"
+)
+
+func IsSortMode(mode string) bool {
+	return mode == SortFit || mode == SortPopularity || mode == SortSize
+}
+
+func IsFitMode(mode string) bool {
+	return mode == FitAny || mode == FitFits || mode == FitGpu
+}
+
+// SortEntries reordena no lugar. A ordenacao por viabilidade e estavel de
+// proposito: dentro de um mesmo veredito a ordem de chegada — a popularidade
+// da API — e a melhor desempate que existe.
+func SortEntries(entries []contract.TCatalogEntry, mode string) {
+	switch mode {
+	case SortFit:
+		sort.SliceStable(entries, func(i, j int) bool {
+			return entries[i].FitRank < entries[j].FitRank
+		})
+	case SortSize:
+		sort.SliceStable(entries, func(i, j int) bool {
+			return entries[i].SizeBytes < entries[j].SizeBytes
+		})
+	}
+}
+
+// FilterByFit descarta o que a maquina nao aguenta. Fora do modo `any` um
+// modelo ja instalado nunca e escondido: ele esta no disco, e sumir com ele da
+// lista deixaria o operador sem o botao para removê-lo.
+func FilterByFit(entries []contract.TCatalogEntry, mode string) []contract.TCatalogEntry {
+	if mode == "" || mode == FitAny {
+		return entries
+	}
+	kept := make([]contract.TCatalogEntry, 0, len(entries))
+	for _, e := range entries {
+		switch mode {
+		case FitGpu:
+			if e.FitGpu || e.Installed {
+				kept = append(kept, e)
+			}
+		default:
+			if e.FitRank != contract.FitRankNo || e.Installed {
+				kept = append(kept, e)
+			}
+		}
+	}
+	return kept
+}
+
+func Limit(entries []contract.TCatalogEntry, max int) []contract.TCatalogEntry {
+	if max > 0 && len(entries) > max {
+		return entries[:max]
+	}
+	return entries
 }

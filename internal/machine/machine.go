@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/MacroStudio-Solutions/models-helper/internal/contract"
+	"github.com/MacroStudio-Solutions/models-helper/internal/format"
 )
 
 func Profile() contract.TMachineProfile {
@@ -24,6 +25,30 @@ func Profile() contract.TMachineProfile {
 		p.HasGpu = detectGpuFallback()
 	}
 	p.HasVulkan, p.VulkanUnavailableReason = detectVulkan()
+	return describe(p)
+}
+
+// describe preenche os rotulos legiveis. Fica no fim do perfil, e nao em cada
+// leitor, para que os campos brutos e os formatados nunca discordem.
+func describe(p contract.TMachineProfile) contract.TMachineProfile {
+	p.RamTotalLabel = format.Bytes(p.RamTotalBytes)
+	p.RamAvailableLabel = format.Bytes(p.RamAvailableBytes)
+	p.CpuLabel = format.Cores(p.CpuCores)
+	if p.VramBytes > 0 {
+		p.VramLabel = format.Bytes(p.VramBytes)
+	} else {
+		p.VramLabel = "sem memória de vídeo detectada"
+	}
+	switch {
+	case p.HasGpu && p.GpuName != "" && p.VramBytes > 0:
+		p.GpuLabel = p.GpuName + " · " + format.Bytes(p.VramBytes)
+	case p.HasGpu && p.GpuName != "":
+		p.GpuLabel = p.GpuName
+	case p.HasGpu:
+		p.GpuLabel = "GPU detectada"
+	default:
+		p.GpuLabel = "sem GPU dedicada"
+	}
 	return p
 }
 

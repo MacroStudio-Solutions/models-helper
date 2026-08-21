@@ -15,12 +15,16 @@ import (
 	"github.com/MacroStudio-Solutions/models-helper/internal/jobs"
 	"github.com/MacroStudio-Solutions/models-helper/internal/machine"
 	"github.com/MacroStudio-Solutions/models-helper/internal/paths"
+	"github.com/MacroStudio-Solutions/models-helper/internal/preset"
 	"github.com/MacroStudio-Solutions/models-helper/internal/statuscmd"
 )
 
 const defaultCatalogLimit = 6
 const searchCatalogLimit = 20
 const maxCatalogLimit = 50
+
+const profileLocalModels = "local-models"
+const profileLocalTranscription = "local-transcription"
 
 func emit(data any, herr *contract.THelperError) {
 	e := &contract.THelperEnvelope[any]{
@@ -86,141 +90,152 @@ func runMachine(args []string) int {
 	return 0
 }
 
+// tCatalogView sao as tres decisoes que o consumidor toma sobre uma lista de
+// catalogo: quantos itens, em que ordem e o que esconder. Ficam juntas porque
+// os quatro subcomandos de catalogo aceitam exatamente as mesmas.
+type tCatalogView struct {
+	limit int
+	sort  string
+	fit   string
+}
+
+func catalogViewFlags(fs *flag.FlagSet, defaultLimit int, defaultSort string) *tCatalogView {
+	view := &tCatalogView{}
+	fs.IntVar(&view.limit, "limit", defaultLimit, "quantidade maxima de modelos")
+	fs.StringVar(&view.sort, "sort", defaultSort, "ordem: fit, popularity ou size")
+	fs.StringVar(&view.fit, "fit", catalog.FitAny, "filtro de viabilidade: any, fits ou gpu")
+	return view
+}
+
+func (v *tCatalogView) validate() *contract.THelperError {
+	if !catalog.IsSortMode(v.sort) {
+		return contract.Errorf("INVALID_USAGE", "ordem desconhecida: %s (use fit, popularity ou size)", v.sort)
+	}
+	if !catalog.IsFitMode(v.fit) {
+		return contract.Errorf("INVALID_USAGE", "filtro de viabilidade desconhecido: %s (use any, fits ou gpu)", v.fit)
+	}
+	return nil
+}
+
+// apply e o unico caminho pelo qual uma lista de catalogo chega ao envelope:
+// anexa o estado de download, filtra, ordena e corta, nessa ordem. Filtrar
+// antes de ordenar mantem o corte previsivel — cortar primeiro descartaria
+// justamente o que a ordenacao traria para o topo.
+func (v *tCatalogView) apply(entries []contract.TCatalogEntry, modelsDir string) []contract.TCatalogEntry {
+	statuscmd.AttachDownloads(entries, modelsDir)
+	entries = catalog.FilterByFit(entries, v.fit)
+	catalog.SortEntries(entries, v.sort)
+	return catalog.Limit(entries, clampLimit(v.limit))
+}
+
 func runCatalog(args []string) int {
 	if len(args) == 0 {
-		emit(nil, contract.Errorf("INVALID_USAGE", "uso: catalog <list|search|versions> [opcoes]"))
+		emit(nil, contract.Errorf("INVALID_USAGE", "uso: catalog <list|search|versions|curated> [opcoes]"))
 		return 1
 	}
-	switch args[0] {
-	case "list":
-		fs := newFlagSet("catalog list")
-		limit := fs.Int("limit", defaultCatalogLimit, "quantidade maxima de modelos")
-		if herr := parse(fs, args[1:]); herr != nil {
-			emit(nil, herr)
-			return 1
-		}
-		if fs.NArg() > 0 {
-			emit(nil, contract.Errorf("INVALID_USAGE", "catalog list nao aceita argumentos posicionais"))
-			return 1
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		client := catalog.NewClient()
-		profile := machine.Profile()
-		modelsDir := paths.LlamaModelsDir()
-		models, err := client.List(ctx, clampLimit(*limit))
-		if err != nil {
-			emit(nil, asHelperError(err))
-			return 1
-		}
-		entries := catalog.DefaultEntries(ctx, client, models, profile, modelsDir)
-		collected := jobs.Collect(paths.ModelsRoot())
-		for _, c := range collected {
-			jobs.Reap(c)
-			jobs.RefreshReceived(c)
-		}
-		byFile := jobs.LatestByFile(collected, modelsDir)
-		for i := range entries {
-			attachDownload(&entries[i], byFile)
-		}
-		emit(entries, nil)
-		return 0
+
+	sub := args[0]
+	rest := args[1:]
+
+	fs := newFlagSet("catalog " + sub)
+	defaultLimit := defaultCatalogLimit
+	defaultSort := catalog.SortFit
+	switch sub {
 	case "search":
-		fs := newFlagSet("catalog search")
-		if herr := parse(fs, args[1:]); herr != nil {
-			emit(nil, herr)
-			return 1
+		defaultLimit = searchCatalogLimit
+	case "versions":
+		defaultLimit = maxCatalogLimit
+		defaultSort = catalog.SortSize
+	case "curated":
+		defaultLimit = len(catalog.CuratedRepos())
+	case "list":
+	default:
+		emit(nil, contract.Errorf("INVALID_USAGE", "subcomando de catalog desconhecido: %s", sub))
+		return 1
+	}
+	view := catalogViewFlags(fs, defaultLimit, defaultSort)
+	if herr := parse(fs, rest); herr != nil {
+		emit(nil, herr)
+		return 1
+	}
+	if herr := view.validate(); herr != nil {
+		emit(nil, herr)
+		return 1
+	}
+
+	wantsTerm := sub == "search" || sub == "versions"
+	if wantsTerm && fs.NArg() != 1 {
+		usage := "uso: catalog search <termo> [opcoes]"
+		if sub == "versions" {
+			usage = "uso: catalog versions <repo> [opcoes]"
 		}
-		if fs.NArg() != 1 {
-			emit(nil, contract.Errorf("INVALID_USAGE", "uso: catalog search <termo>"))
-			return 1
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		client := catalog.NewClient()
-		profile := machine.Profile()
-		modelsDir := paths.LlamaModelsDir()
-		models, err := client.Search(ctx, fs.Arg(0), searchCatalogLimit)
+		emit(nil, contract.Errorf("INVALID_USAGE", "%s", usage))
+		return 1
+	}
+	if !wantsTerm && fs.NArg() > 0 {
+		emit(nil, contract.Errorf("INVALID_USAGE", "catalog %s nao aceita argumentos posicionais", sub))
+		return 1
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	client := catalog.NewClient()
+	profile := machine.Profile()
+	modelsDir := paths.LlamaModelsDir()
+
+	var entries []contract.TCatalogEntry
+	switch sub {
+	case "list":
+		// A busca por popularidade pesca fundo de proposito: filtrar por
+		// viabilidade um punhado de resultados devolveria uma lista quase
+		// vazia justamente na maquina que mais precisa do filtro.
+		models, err := client.List(ctx, clampLimit(view.limit*4))
 		if err != nil {
 			emit(nil, asHelperError(err))
 			return 1
 		}
-		entries := catalog.DefaultEntries(ctx, client, models, profile, modelsDir)
-		collected := jobs.Collect(paths.ModelsRoot())
-		for _, c := range collected {
-			jobs.Reap(c)
-			jobs.RefreshReceived(c)
+		entries = catalog.DefaultEntries(ctx, client, models, profile, modelsDir)
+	case "search":
+		models, err := client.Search(ctx, fs.Arg(0), clampLimit(view.limit*2))
+		if err != nil {
+			emit(nil, asHelperError(err))
+			return 1
 		}
-		byFile := jobs.LatestByFile(collected, modelsDir)
-		for i := range entries {
-			attachDownload(&entries[i], byFile)
-		}
-		emit(entries, nil)
-		return 0
+		entries = catalog.DefaultEntries(ctx, client, models, profile, modelsDir)
 	case "versions":
-		fs := newFlagSet("catalog versions")
-		if herr := parse(fs, args[1:]); herr != nil {
-			emit(nil, herr)
-			return 1
-		}
-		if fs.NArg() != 1 {
-			emit(nil, contract.Errorf("INVALID_USAGE", "uso: catalog versions <repo>"))
-			return 1
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-		client := catalog.NewClient()
-		profile := machine.Profile()
-		modelsDir := paths.LlamaModelsDir()
-		entries, herr := catalog.VersionEntries(ctx, client, fs.Arg(0), profile, modelsDir)
+		found, herr := catalog.VersionEntries(ctx, client, fs.Arg(0), profile, modelsDir)
 		if herr != nil {
 			emit(nil, herr)
 			return 1
 		}
-		collected := jobs.Collect(paths.ModelsRoot())
-		for _, c := range collected {
-			jobs.Reap(c)
-			jobs.RefreshReceived(c)
-		}
-		byFile := jobs.LatestByFile(collected, modelsDir)
-		for i := range entries {
-			attachDownload(&entries[i], byFile)
-		}
-		emit(entries, nil)
-		return 0
-	default:
-		emit(nil, contract.Errorf("INVALID_USAGE", "subcomando de catalog desconhecido: %s", args[0]))
-		return 1
+		entries = found
+	case "curated":
+		entries = catalog.CuratedEntries(ctx, client, profile, modelsDir)
 	}
-}
 
-func attachDownload(entry *contract.TCatalogEntry, byFile map[string]*jobs.TJobFile) {
-	j := byFile[entry.File]
-	if j == nil {
-		entry.Download = nil
-		return
-	}
-	if j.State == contract.JobStateCompleted && entry.Installed {
-		entry.Download = nil
-		return
-	}
-	job := j.TDownloadJob
-	entry.Download = &job
+	emit(view.apply(entries, modelsDir), nil)
+	return 0
 }
 
 func runInstalled(args []string) int {
 	fs := newFlagSet("installed")
 	dir := fs.String("dir", "", "diretorio a inventariar")
+	ext := fs.String("ext", inventory.ExtGguf, "extensao dos pesos: .gguf ou .bin")
+	speech := fs.Bool("speech", false, "avaliar viabilidade pela formula de transcricao")
 	if herr := parse(fs, args); herr != nil {
 		emit(nil, herr)
 		return 1
 	}
 	if *dir == "" {
-		emit(nil, contract.Errorf("INVALID_USAGE", "uso: installed --dir <caminho>"))
+		emit(nil, contract.Errorf("INVALID_USAGE", "uso: installed --dir <caminho> [--ext .gguf|.bin] [--speech]"))
+		return 1
+	}
+	if *ext != inventory.ExtGguf && *ext != inventory.ExtWhisper {
+		emit(nil, contract.Errorf("INVALID_USAGE", "extensao nao suportada: %s (use .gguf ou .bin)", *ext))
 		return 1
 	}
 	profile := machine.Profile()
-	models, err := inventory.List(*dir, profile)
+	models, err := inventory.ListWith(*dir, profile, inventory.TOptions{Ext: *ext, Speech: *speech})
 	if err != nil {
 		emit(nil, contract.Errorf("INVENTORY_FAILED", "falha ao inventariar %s: %v", *dir, err))
 		return 1
@@ -311,6 +326,67 @@ func runRemove(args []string) int {
 	return 0
 }
 
+func runPreset(args []string) int {
+	if len(args) == 0 {
+		emit(nil, contract.Errorf("INVALID_USAGE", "uso: preset <show|set|clear|ensure> [opcoes]"))
+		return 1
+	}
+	switch args[0] {
+	case "show":
+		fs := newFlagSet("preset show")
+		if herr := parse(fs, args[1:]); herr != nil {
+			emit(nil, herr)
+			return 1
+		}
+		emit(preset.Read(), nil)
+		return 0
+	case "ensure":
+		fs := newFlagSet("preset ensure")
+		if herr := parse(fs, args[1:]); herr != nil {
+			emit(nil, herr)
+			return 1
+		}
+		if _, herr := preset.Ensure(); herr != nil {
+			emit(nil, herr)
+			return 1
+		}
+		emit(preset.Read(), nil)
+		return 0
+	case "set":
+		fs := newFlagSet("preset set")
+		model := fs.String("model", "", "caminho do modelo padrao")
+		if herr := parse(fs, args[1:]); herr != nil {
+			emit(nil, herr)
+			return 1
+		}
+		if *model == "" {
+			emit(nil, contract.Errorf("INVALID_USAGE", "uso: preset set --model <caminho>"))
+			return 1
+		}
+		state, herr := preset.Set(*model)
+		emit(state, herr)
+		if herr != nil {
+			return 1
+		}
+		return 0
+	case "clear":
+		fs := newFlagSet("preset clear")
+		if herr := parse(fs, args[1:]); herr != nil {
+			emit(nil, herr)
+			return 1
+		}
+		state, herr := preset.Clear()
+		emit(state, herr)
+		if herr != nil {
+			return 1
+		}
+		return 0
+	default:
+		emit(nil, contract.Errorf("INVALID_USAGE", "subcomando de preset desconhecido: %s", args[0]))
+		return 1
+	}
+}
+
 func runStatus(args []string) int {
 	fs := newFlagSet("status")
 	profile := fs.String("profile", "", "perfil de leitura composta")
@@ -318,16 +394,20 @@ func runStatus(args []string) int {
 		emit(nil, herr)
 		return 1
 	}
-	if *profile == "" {
+	switch *profile {
+	case "":
 		emit(nil, contract.Errorf("INVALID_USAGE", "uso: status --profile <nome>"))
 		return 1
-	}
-	if *profile != "local-models" {
+	case profileLocalModels:
+		emit(statuscmd.Build(), nil)
+		return 0
+	case profileLocalTranscription:
+		emit(statuscmd.BuildTranscription(), nil)
+		return 0
+	default:
 		emit(nil, contract.Errorf("UNSUPPORTED_PROFILE", "perfil nao suportado: %s", *profile))
 		return 1
 	}
-	emit(statuscmd.Build(), nil)
-	return 0
 }
 
 func runTransfer(args []string) int {
@@ -350,7 +430,7 @@ func runTransfer(args []string) int {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		emit(nil, contract.Errorf("INVALID_USAGE", "uso: models-helper <machine|catalog|installed|download|remove|status> [opcoes]"))
+		emit(nil, contract.Errorf("INVALID_USAGE", "uso: models-helper <machine|catalog|installed|download|remove|preset|status> [opcoes]"))
 		return 1
 	}
 	switch args[0] {
@@ -364,6 +444,8 @@ func run(args []string) int {
 		return runDownload(args[1:])
 	case "remove":
 		return runRemove(args[1:])
+	case "preset":
+		return runPreset(args[1:])
 	case "status":
 		return runStatus(args[1:])
 	case "__transfer":

@@ -24,30 +24,57 @@ falha.
 | Comando | Devolve | Observação |
 |---|---|---|
 | `machine` | `TMachineProfile` | Memória total/disponível, núcleos, GPU, VRAM e caminho Vulkan com motivo quando ausente |
-| `catalog list --limit <n>` | `TCatalogEntry[]` | Modelos por popularidade da API pública, com cache curto |
-| `catalog search <termo>` | `TCatalogEntry[]` | Busca por palavra-chave na mesma API |
-| `catalog versions <repo>` | `TCatalogEntry[]` | Variantes com peso real por versão |
-| `installed --dir <caminho>` | `TInstalledModel[]` | Inventário local com veredito já calculado |
+| `catalog list [--limit <n>] [--sort <ordem>] [--fit <filtro>]` | `TCatalogEntry[]` | Modelos por popularidade da API pública, com cache curto |
+| `catalog search <termo> [--limit] [--sort] [--fit]` | `TCatalogEntry[]` | Busca por palavra-chave na mesma API |
+| `catalog versions <repo> [--sort] [--fit]` | `TCatalogEntry[]` | Variantes com peso real por versão |
+| `catalog curated [--limit] [--sort] [--fit]` | `TCatalogEntry[]` | Vitrine editorial: modelos escolhidos a dedo, com justificativa por item |
+| `installed --dir <caminho> [--ext .gguf\|.bin] [--speech]` | `TInstalledModel[]` | Inventário local com veredito já calculado |
 | `download start --repo <id> --file <arquivo> --dest <caminho>` | `TDownloadJob` | Retorna imediatamente com o identificador |
 | `download status [--job <id>] [--dest <caminho>]` | `TDownloadJob[]` | Bytes, total e estado explícitos |
 | `download cancel --job <id>` | `TDownloadJob` | Marca o cancelamento; o transferidor remove o temporário |
 | `remove --path <caminho>` | `{ removed: boolean }` | Recusa caminho fora do diretório de modelos |
-| `status --profile local-models` | `TLocalModelsStatus` | Leitura composta, fonte única do painel |
+| `preset show\|set --model <caminho>\|clear\|ensure` | `TPreset` | Modelo padrão do servidor em modo roteador, exposto como `studio-local` |
+| `status --profile local-models` | `TLocalModelsStatus` | Leitura composta, fonte única do painel de modelos |
+| `status --profile local-transcription` | `TTranscriptionStatus` | Leitura composta, fonte única do painel de transcrição |
+
+`--sort` aceita `fit` (padrão em `list`, `search` e `curated`), `popularity` e
+`size` (padrão em `versions`). `--fit` aceita `any` (padrão), `fits` e `gpu`.
+Um modelo já instalado nunca é escondido pelo filtro: ele ocupa disco, e sumir
+com ele da lista tiraria do operador o lugar onde ele o remove.
 
 O contrato de saída é normativo no SDS
 (`engineering/runtime-multiprograma-modelos/sds-runtime-multiprograma-modelos`,
 bloco "Modelo de Dados") e espelhado pelas structs Go `THelperEnvelope`,
 `TMachineProfile`, `TModelFit`, `TCatalogEntry`, `TInstalledModel`,
-`TDownloadJob` e `TLocalModelsStatus` em `internal/contract`. Campos novos
-entram como aditivos (`catalogError` é o primeiro); nenhum campo existente é
-renomeado.
+`TDownloadJob`, `TLocalModelsStatus` e `TTranscriptionStatus` em
+`internal/contract`. Campos novos entram como aditivos; nenhum campo existente
+é renomeado. O teste de contrato afirma o conjunto v1 como piso e permite
+crescimento — igualdade exata inverteria a regra, marcando como quebra
+justamente o que o contrato autoriza.
 
 ## Regras de comportamento
 
-- **Veredito pronto no dado**: `fitOk`, `fitTight`, `fitGpu` e `requiredBytes`
-  chegam calculados em todo item de catálogo e de inventário; o consumidor não
-  compara números. A fórmula replica a do painel original: peso × 1,2 + margem
-  de KV-cache de 1,5 GiB contra RAM disponível + VRAM.
+- **Veredito pronto no dado**: `fitOk`, `fitTight`, `fitGpu`, `fitRank`,
+  `fitLabel` e `requiredBytes` chegam calculados em todo item de catálogo e de
+  inventário; o consumidor não compara números nem encadeia condições. A
+  fórmula de linguagem é peso × 1,2 + margem de KV-cache de 1,5 GiB contra RAM
+  disponível + VRAM. A de fala (`--speech`) usa margem de 512 MiB e ignora
+  memória de vídeo: um modelo de transcrição não guarda contexto de conversa, e
+  o artefato de whisper.cpp declarado é o de processador.
+- **Tudo que uma pessoa lê chega formatado**: cada valor bruto tem um rótulo ao
+  lado (`ramTotalLabel`, `sizeLabel`, `progressLabel`, `fitLabel`). O painel do
+  Construtor apenas interpola tokens — não tem operador de número — então
+  formatar no consumidor não é uma opção disponível.
+- **Ordem por viabilidade, estável**: a ordenação por veredito preserva a ordem
+  de chegada dentro de cada faixa, que é a popularidade da API. Ordenar sem
+  estabilidade descartaria o único sinal de qualidade que a lista carrega.
+- **Vitrine editorial separada da busca**: `catalog curated` é uma lista escrita
+  à mão, com justificativa por modelo; `catalog search` continua sendo
+  popularidade pura, porque quem procura um modelo específico não quer opinião.
+- **Catálogo de transcrição fixo**: dois repositórios oficiais e onze arquivos
+  que não mudam, com peso de referência embutido — a lista continua utilizável
+  com a API pública fora do ar. A recomendação padrão é medida, não inferida do
+  tamanho.
 - **Download honesto**: escrita em arquivo temporário oculto no próprio
   diretório de destino e promoção do nome final exclusivamente por renomeação —
   nenhum leitor observa arquivo parcial com nome definitivo. O estado é sempre
@@ -84,6 +111,8 @@ renomeado.
 | `~/.studio/models/<runtime>/.<arquivo>.part` | Temporário de transferência em curso |
 | `~/.studio/models/<runtime>/<arquivo>.download.json` | Estado lateral do trabalho |
 | `~/.studio/models/<runtime>/<arquivo>.download.json.cancel` | Marcador de cancelamento |
+| `~/.studio/models/llama-cpp/presets.ini` | Preset do modo roteador; declara `studio-local` apontando para o padrão |
+| `~/.studio/models/whisper-cpp/.server.json` | Registro de qual modelo o servidor de transcrição carregou |
 | `~/.studio/models/.models-helper/cache/` | Cache curto do catálogo |
 
 ## Variáveis de ambiente
@@ -92,7 +121,8 @@ renomeado.
 |---|---|---|
 | `MODELS_HELPER_MODELS_ROOT` | `~/.studio/models` | Raiz do diretório de modelos |
 | `MODELS_HELPER_HF_API` | `https://huggingface.co` | Base da API pública de modelos |
-| `MODELS_HELPER_SERVER_URL` | `http://127.0.0.1:8081` | Base de sondagem do servidor local |
+| `MODELS_HELPER_SERVER_URL` | `http://127.0.0.1:8081` | Base de sondagem do servidor de linguagem |
+| `MODELS_HELPER_TRANSCRIPTION_SERVER_URL` | `http://127.0.0.1:8082` | Base de sondagem do servidor de transcrição |
 | `MODELS_HELPER_STUDIO_BIN` | `studio` | Binário da CLI usado na resolução de runtime |
 
 ## Desenvolvimento

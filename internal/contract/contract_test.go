@@ -18,11 +18,16 @@ func keys(t *testing.T, v any) map[string]any {
 	return m
 }
 
+// assertKeys confere que todo campo esperado continua presente, sem exigir que
+// nada mais exista.
+//
+// A regra do contrato e aditiva: um consumidor que ja le o envelope nao pode
+// perder um campo, mas ganhar um campo novo nunca quebra ninguem. Um teste de
+// igualdade exata inverteria a regra — cada campo acrescentado apareceria como
+// quebra, e o que ele realmente protege (remocao e renomeacao) ficaria
+// indistinguivel de crescimento normal.
 func assertKeys(t *testing.T, got map[string]any, want []string) {
 	t.Helper()
-	if len(got) != len(want) {
-		t.Fatalf("campoCount %d != %d: %v", len(got), len(want), got)
-	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {
 			t.Fatalf("campo %s ausente em %v", k, got)
@@ -36,48 +41,80 @@ func TestEnvelopeShape(t *testing.T) {
 	ok.Data = &data
 	m := keys(t, ok)
 	assertKeys(t, m, []string{"schemaVersion", "ok", "data"})
+	if _, exists := m["error"]; exists {
+		t.Fatalf("envelope de sucesso nao deve carregar error: %v", m)
+	}
 
 	fail := &THelperEnvelope[map[string]any]{SchemaVersion: 1, Ok: false, Error: &THelperError{Code: "X", Message: "y"}}
 	m = keys(t, fail)
 	assertKeys(t, m, []string{"schemaVersion", "ok", "error"})
+	if _, exists := m["data"]; exists {
+		t.Fatalf("envelope de falha nao deve carregar data: %v", m)
+	}
 
 	err := keys(t, fail.Error)
 	assertKeys(t, err, []string{"code", "message"})
 }
 
-func TestMachineProfileShape(t *testing.T) {
+func TestMachineProfileKeepsV1Fields(t *testing.T) {
 	assertKeys(t, keys(t, TMachineProfile{}), []string{
 		"ramTotalBytes", "ramAvailableBytes", "cpuCores", "hasGpu", "gpuName",
 		"vramBytes", "hasVulkan", "vulkanUnavailableReason",
 	})
 }
 
-func TestModelFitShape(t *testing.T) {
+func TestMachineProfileCarriesLabels(t *testing.T) {
+	assertKeys(t, keys(t, TMachineProfile{}), []string{
+		"ramTotalLabel", "ramAvailableLabel", "vramLabel", "cpuLabel", "gpuLabel",
+	})
+}
+
+func TestModelFitKeepsV1Fields(t *testing.T) {
 	assertKeys(t, keys(t, TModelFit{}), []string{"fitOk", "fitTight", "fitGpu", "requiredBytes"})
 }
 
-func TestCatalogEntryShape(t *testing.T) {
-	entry := TCatalogEntry{Name: "n", RepoId: "o/r", File: "f.gguf", Quantization: "Q4_K_M", SizeBytes: 1, SizeGb: "0.0", Installed: false}
-	data, err := json.Marshal(entry)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+func TestModelFitCarriesRankAndLabel(t *testing.T) {
+	assertKeys(t, keys(t, TModelFit{}), []string{"fitRank", "fitLabel", "requiredLabel"})
+}
+
+func TestCatalogEntryKeepsV1Fields(t *testing.T) {
+	entry := TCatalogEntry{Name: "n", RepoId: "o/r", File: "f.gguf", Quantization: "Q4_K_M", SizeBytes: 1, SizeGb: "0.0"}
+	m := keys(t, entry)
+	assertKeys(t, m, []string{
+		"fitOk", "fitTight", "fitGpu", "requiredBytes", "name", "repoId",
+		"file", "quantization", "sizeBytes", "sizeGb", "installed", "download",
+	})
+	if m["name"] != "n" || m["repoId"] != "o/r" || m["file"] != "f.gguf" || m["sizeGb"] != "0.0" {
+		t.Fatalf("valores de v1 mudaram de forma: %v", m)
 	}
-	if string(data) != `{"fitOk":false,"fitTight":false,"fitGpu":false,"requiredBytes":0,"name":"n","repoId":"o/r","file":"f.gguf","quantization":"Q4_K_M","sizeBytes":1,"sizeGb":"0.0","installed":false,"download":null}` {
-		t.Fatalf("json inesperado: %s", data)
+	if m["download"] != nil {
+		t.Fatalf("download sem trabalho deve marshalar null: %v", m["download"])
 	}
 }
 
-func TestInstalledModelShape(t *testing.T) {
+func TestCatalogEntryCarriesEditorialFields(t *testing.T) {
+	assertKeys(t, keys(t, TCatalogEntry{}), []string{"sizeLabel", "engine", "summary", "recommended"})
+}
+
+func TestInstalledModelKeepsV1Fields(t *testing.T) {
 	assertKeys(t, keys(t, TInstalledModel{}), []string{
 		"fitOk", "fitTight", "fitGpu", "requiredBytes", "name", "path", "sizeBytes", "sizeGb",
 	})
 }
 
-func TestDownloadJobShape(t *testing.T) {
+func TestInstalledModelCarriesServingFields(t *testing.T) {
+	assertKeys(t, keys(t, TInstalledModel{}), []string{"sizeLabel", "apiName", "engine", "isDefault", "isLoaded"})
+}
+
+func TestDownloadJobKeepsV1Fields(t *testing.T) {
 	assertKeys(t, keys(t, TDownloadJob{}), []string{
 		"jobId", "repoId", "file", "destination", "state", "receivedBytes",
 		"totalBytes", "percent", "pid", "startedAt", "updatedAt", "error",
 	})
+}
+
+func TestDownloadJobCarriesLabels(t *testing.T) {
+	assertKeys(t, keys(t, TDownloadJob{}), []string{"receivedLabel", "totalLabel", "progressLabel"})
 }
 
 func TestLocalModelsStatusShape(t *testing.T) {
@@ -96,6 +133,21 @@ func TestLocalModelsStatusShape(t *testing.T) {
 		t.Fatalf("server nao e objeto: %v", m["server"])
 	}
 	assertKeys(t, serverM, []string{"online", "modelId", "baseUrl"})
+	assertKeys(t, serverM, []string{"mode", "models", "modelCount", "loadedCount", "hasDefault", "defaultName"})
+}
+
+func TestTranscriptionStatusShape(t *testing.T) {
+	st := TTranscriptionStatus{Installed: []TInstalledModel{}, Catalog: []TCatalogEntry{}}
+	m := keys(t, st)
+	assertKeys(t, m, []string{
+		"runtime", "server", "machine", "installed", "hasInstalled", "catalog",
+		"catalogError", "recommended", "recommendedFile", "hasRecommended",
+	})
+	serverM, ok := m["server"].(map[string]any)
+	if !ok {
+		t.Fatalf("server nao e objeto: %v", m["server"])
+	}
+	assertKeys(t, serverM, []string{"online", "baseUrl", "inferenceUrl", "modelName", "modelPath", "hasModelName"})
 }
 
 func TestDownloadJobPointerMarshalsNull(t *testing.T) {

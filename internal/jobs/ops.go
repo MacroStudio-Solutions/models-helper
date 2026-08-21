@@ -33,7 +33,7 @@ func Start(repoId string, file string, destDir string) (*contract.TDownloadJob, 
 		collected := TCollected{Job: existing, Path: sc}
 		Reap(collected)
 		if existing.State == contract.JobStateRunning {
-			current := existing.TDownloadJob
+			current := Snapshot(existing)
 			return &current, contract.Errorf("DOWNLOAD_ALREADY_RUNNING", "ja existe trabalho em execucao para %s", file)
 		}
 	}
@@ -86,7 +86,7 @@ func Start(repoId string, file string, destDir string) (*contract.TDownloadJob, 
 	}
 	_ = cmd.Process.Release()
 
-	job := j.TDownloadJob
+	job := Snapshot(j)
 	return &job, nil
 }
 
@@ -112,7 +112,7 @@ func Status(jobId string, destDir string) ([]contract.TDownloadJob, *contract.TH
 		if jobId != "" && c.Job.JobId != jobId {
 			continue
 		}
-		jobs = append(jobs, c.Job.TDownloadJob)
+		jobs = append(jobs, Snapshot(c.Job))
 	}
 	if jobId != "" && len(jobs) == 0 {
 		return nil, contract.Errorf("JOB_NOT_FOUND", "nenhum trabalho com identificador %s", jobId)
@@ -132,7 +132,7 @@ func Cancel(jobId string) (*contract.TDownloadJob, *contract.THelperError) {
 				_ = os.WriteFile(MarkerPath(c.Job.Destination, c.Job.File), []byte(nowIso()), 0644)
 			}
 		}
-		job := c.Job.TDownloadJob
+		job := Snapshot(c.Job)
 		return &job, nil
 	}
 	return nil, contract.Errorf("JOB_NOT_FOUND", "nenhum trabalho com identificador %s", jobId)

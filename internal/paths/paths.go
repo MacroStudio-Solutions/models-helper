@@ -23,6 +23,13 @@ func LlamaModelsDir() string {
 	return filepath.Join(ModelsRoot(), "llama-cpp")
 }
 
+// WhisperModelsDir e o diretorio de pesos do whisper.cpp. Ele fica ao lado do
+// diretorio do llama.cpp, sob a mesma raiz, porque o guarda de caminho e o
+// inventario de downloads sao os mesmos para os dois motores.
+func WhisperModelsDir() string {
+	return filepath.Join(ModelsRoot(), "whisper-cpp")
+}
+
 func CacheDir() string {
 	return filepath.Join(ModelsRoot(), ".models-helper", "cache")
 }

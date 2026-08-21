@@ -21,9 +21,16 @@ func SanitizeError(raw string) string {
 }
 
 func ResolveLlamaRuntime(timeout time.Duration) (bool, string) {
+	return ResolveRuntime("llama-cpp", timeout)
+}
+
+// ResolveRuntime pergunta ao Studio se um runtime de pack esta instalado nesta
+// maquina. A falha vira campo, nao codigo de saida: o painel precisa continuar
+// renderizando para explicar o que fazer.
+func ResolveRuntime(runtimeId string, timeout time.Duration) (bool, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, env.StudioBin(), "pack", "resolve-runtime", "llama-cpp")
+	cmd := exec.CommandContext(ctx, env.StudioBin(), "pack", "resolve-runtime", runtimeId)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := SanitizeError(string(out))
@@ -31,7 +38,7 @@ func ResolveLlamaRuntime(timeout time.Duration) (bool, string) {
 			msg = SanitizeError(err.Error())
 		}
 		if msg == "" {
-			msg = "falha ao resolver o runtime llama-cpp"
+			msg = "falha ao resolver o runtime " + runtimeId
 		}
 		return false, msg
 	}
