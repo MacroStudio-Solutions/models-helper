@@ -765,7 +765,7 @@ func TestCatalogListOrdersAndFiltersByFit(t *testing.T) {
 		t.Fatalf("um modelo minusculo deve sobreviver ao filtro: %s", r.Stdout)
 	}
 	entry := list[0].(map[string]any)
-	for _, k := range []string{"fitRank", "fitLabel", "requiredLabel", "sizeLabel"} {
+	for _, k := range []string{"fitRank", "fitLabel", "fitTone", "requiredLabel", "sizeLabel"} {
 		if _, ok := entry[k]; !ok {
 			t.Fatalf("campo %s ausente: %s", k, r.Stdout)
 		}
@@ -947,6 +947,14 @@ func TestStatusTranscriptionProfile(t *testing.T) {
 	if item["engine"] != "whisper" || item["isLoaded"] != true {
 		t.Fatalf("o modelo servido deveria aparecer carregado: %v", item)
 	}
+	// O parakeet nao carrega no whisper-server: a tela precisa do booleano para
+	// nao oferecer um botao de servir que nao funcionaria.
+	if item["canServe"] != true || item["engineLabel"] != "Whisper" {
+		t.Fatalf("peso de whisper deveria ser servivel e rotulado: %v", item)
+	}
+	if data["hasServable"] != true {
+		t.Fatalf("ha um peso servivel instalado: %s", r.Stdout)
+	}
 }
 
 func TestStatusRejectsAnUnknownProfile(t *testing.T) {
@@ -954,5 +962,35 @@ func TestStatusRejectsAnUnknownProfile(t *testing.T) {
 	r := runHelper(t, "status", "--profile", "inexistente")
 	if r.ExitCode == 0 || errCode(t, r) != "UNSUPPORTED_PROFILE" {
 		t.Fatalf("perfil desconhecido deveria ser erro nomeado: %s", r.Stdout)
+	}
+}
+
+// Um parakeet sozinho no disco nao e "nenhum modelo": e um modelo que o
+// servidor HTTP nao carrega, e a tela precisa dizer a segunda coisa.
+func TestParakeetAloneIsNotServable(t *testing.T) {
+	root := setupRoot(t)
+	writeFakeStudio(t, 0, "")
+	newFakeHub(t, map[string]uint64{"ggml-parakeet-tdt-0.6b-v3-q8_0.bin": 668757119})
+	dir := filepath.Join(root, "whisper-cpp")
+	os.MkdirAll(dir, 0755)
+	os.WriteFile(filepath.Join(dir, "ggml-parakeet-tdt-0.6b-v3-q8_0.bin"), make([]byte, 4096), 0644)
+
+	r := runHelper(t, "status", "--profile", "local-transcription")
+	if r.ExitCode != 0 {
+		t.Fatalf("status: %s / %s", r.Stdout, r.Stderr)
+	}
+	data := dataMap(t, r)
+	if data["hasInstalled"] != true {
+		t.Fatalf("ha um modelo instalado: %s", r.Stdout)
+	}
+	if data["hasServable"] != false {
+		t.Fatalf("nenhum peso instalado e servivel pelo whisper-server: %s", r.Stdout)
+	}
+	if data["hasRecommended"] != true {
+		t.Fatalf("o recomendado esta instalado: %s", r.Stdout)
+	}
+	item := data["installed"].([]any)[0].(map[string]any)
+	if item["canServe"] != false || item["engineLabel"] != "Parakeet" {
+		t.Fatalf("peso de parakeet mal classificado: %v", item)
 	}
 }

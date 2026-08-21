@@ -56,8 +56,12 @@ type TModelFit struct {
 	RequiredBytes uint64 `json:"requiredBytes"`
 	// FitRank ordena o veredito sem que o consumidor compare numero nem
 	// encadeie tres condicoes: 0 GPU, 1 folgado, 2 no limite, 3 nao cabe.
-	FitRank       int    `json:"fitRank"`
-	FitLabel      string `json:"fitLabel"`
+	FitRank  int    `json:"fitRank"`
+	FitLabel string `json:"fitLabel"`
+	// FitTone e o nome do tom visual do veredito. Existe porque o bloco de
+	// condicao do painel so avalia verdadeiro ou falso de um token: sem um tom
+	// pronto, colorir um selo custa tres condicoes encadeadas por linha.
+	FitTone       string `json:"fitTone"`
 	RequiredLabel string `json:"requiredLabel"`
 }
 
@@ -82,6 +86,7 @@ type TCatalogEntry struct {
 	// Preenchidos apenas pelos catalogos curados. Vazios no catalogo remoto,
 	// onde nao ha nada editorial a afirmar sobre um modelo qualquer.
 	Engine      string `json:"engine"`
+	EngineLabel string `json:"engineLabel"`
 	Summary     string `json:"summary"`
 	Recommended bool   `json:"recommended"`
 }
@@ -95,10 +100,15 @@ type TInstalledModel struct {
 	SizeLabel string `json:"sizeLabel"`
 	// ApiName e o nome pelo qual o servidor em modo roteador enderaca este
 	// arquivo: o nome do arquivo sem a extensao. E o que o agente configura.
-	ApiName   string `json:"apiName"`
-	Engine    string `json:"engine"`
-	IsDefault bool   `json:"isDefault"`
-	IsLoaded  bool   `json:"isLoaded"`
+	ApiName     string `json:"apiName"`
+	Engine      string `json:"engine"`
+	EngineLabel string `json:"engineLabel"`
+	IsDefault   bool   `json:"isDefault"`
+	IsLoaded    bool   `json:"isLoaded"`
+	// CanServe diz se o servidor HTTP consegue carregar este peso. O parakeet
+	// tem binario proprio e nao carrega no whisper-server, entao oferecer o
+	// botao de servir para ele seria oferecer um comando que nao roda.
+	CanServe bool `json:"canServe"`
 }
 
 type TDownloadJob struct {
@@ -181,4 +191,8 @@ type TTranscriptionStatus struct {
 	Recommended     string `json:"recommended"`
 	RecommendedFile string `json:"recommendedFile"`
 	HasRecommended  bool   `json:"hasRecommended"`
+	// HasServable separa "nenhum modelo baixado" de "nenhum modelo que o
+	// servidor consiga carregar" — com so um parakeet no disco, as duas frases
+	// sao diferentes e a segunda e a util.
+	HasServable bool `json:"hasServable"`
 }

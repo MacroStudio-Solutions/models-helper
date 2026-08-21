@@ -102,9 +102,23 @@ func SpeechEntries(ctx context.Context, c *TClient, machineProfile contract.TMac
 			SizeLabel:    format.Bytes(size),
 			Installed:    fileExists(filepath.Join(modelsDir, m.File)),
 			Engine:       m.Engine,
+			EngineLabel:  EngineLabel(m.Engine),
 			Summary:      m.Summary,
 			Recommended:  m.File == RecommendedSpeechFile,
 		})
 	}
 	return entries, catalogErr
+}
+
+// EngineLabel e o nome do motor como uma pessoa o le. Fica aqui, ao lado da
+// tabela que decide o motor, para que o rotulo nao possa divergir dela.
+func EngineLabel(engine string) string {
+	switch engine {
+	case EngineParakeet:
+		return "Parakeet"
+	case EngineWhisper:
+		return "Whisper"
+	default:
+		return ""
+	}
 }

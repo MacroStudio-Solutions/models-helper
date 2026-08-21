@@ -178,9 +178,15 @@ func BuildTranscription() contract.TTranscriptionStatus {
 	if err != nil {
 		installed = []contract.TInstalledModel{}
 	}
+	hasServable := false
 	for i := range installed {
 		installed[i].Engine = engineOf(installed[i].Name)
+		installed[i].EngineLabel = catalog.EngineLabel(installed[i].Engine)
+		installed[i].CanServe = installed[i].Engine == catalog.EngineWhisper
 		installed[i].IsLoaded = serverState.Online && serverState.ModelName == installed[i].Name
+		if installed[i].CanServe {
+			hasServable = true
+		}
 	}
 
 	AttachDownloads(catalogEntries, modelsDir)
@@ -210,6 +216,7 @@ func BuildTranscription() contract.TTranscriptionStatus {
 		Recommended:     recommended,
 		RecommendedFile: catalog.RecommendedSpeechFile,
 		HasRecommended:  hasRecommended,
+		HasServable:     hasServable,
 	}
 }
 

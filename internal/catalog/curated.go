@@ -53,6 +53,7 @@ func CuratedEntries(ctx context.Context, c *TClient, machineProfile contract.TMa
 	}
 	for i := range entries {
 		entries[i].Engine = "llama"
+		entries[i].EngineLabel = "llama.cpp"
 		entries[i].Summary = summaries[entries[i].RepoId]
 	}
 	return entries

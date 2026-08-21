@@ -74,7 +74,7 @@ func TestModelFitKeepsV1Fields(t *testing.T) {
 }
 
 func TestModelFitCarriesRankAndLabel(t *testing.T) {
-	assertKeys(t, keys(t, TModelFit{}), []string{"fitRank", "fitLabel", "requiredLabel"})
+	assertKeys(t, keys(t, TModelFit{}), []string{"fitRank", "fitLabel", "fitTone", "requiredLabel"})
 }
 
 func TestCatalogEntryKeepsV1Fields(t *testing.T) {
@@ -93,7 +93,7 @@ func TestCatalogEntryKeepsV1Fields(t *testing.T) {
 }
 
 func TestCatalogEntryCarriesEditorialFields(t *testing.T) {
-	assertKeys(t, keys(t, TCatalogEntry{}), []string{"sizeLabel", "engine", "summary", "recommended"})
+	assertKeys(t, keys(t, TCatalogEntry{}), []string{"sizeLabel", "engine", "engineLabel", "summary", "recommended"})
 }
 
 func TestInstalledModelKeepsV1Fields(t *testing.T) {
@@ -103,7 +103,7 @@ func TestInstalledModelKeepsV1Fields(t *testing.T) {
 }
 
 func TestInstalledModelCarriesServingFields(t *testing.T) {
-	assertKeys(t, keys(t, TInstalledModel{}), []string{"sizeLabel", "apiName", "engine", "isDefault", "isLoaded"})
+	assertKeys(t, keys(t, TInstalledModel{}), []string{"sizeLabel", "apiName", "engine", "engineLabel", "isDefault", "isLoaded", "canServe"})
 }
 
 func TestDownloadJobKeepsV1Fields(t *testing.T) {
@@ -141,7 +141,7 @@ func TestTranscriptionStatusShape(t *testing.T) {
 	m := keys(t, st)
 	assertKeys(t, m, []string{
 		"runtime", "server", "machine", "installed", "hasInstalled", "catalog",
-		"catalogError", "recommended", "recommendedFile", "hasRecommended",
+		"catalogError", "recommended", "recommendedFile", "hasRecommended", "hasServable",
 	})
 	serverM, ok := m["server"].(map[string]any)
 	if !ok {

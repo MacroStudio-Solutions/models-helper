@@ -1,6 +1,10 @@
 package fit
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/MacroStudio-Solutions/models-helper/internal/contract"
+)
 
 const gib = uint64(1073741824)
 
@@ -70,6 +74,17 @@ func TestRankAndLabelFollowTheVerdict(t *testing.T) {
 	no := Compute(8*gib, 4*gib, 0, 60*gib)
 	if no.FitRank != 3 || no.FitLabel != "não recomendado" {
 		t.Fatalf("veredito negativo: %+v", no)
+	}
+
+	// O tom acompanha o veredito porque o painel nao consegue decidi-lo: o
+	// bloco de condicao so avalia verdadeiro ou falso de um token.
+	for _, c := range []struct {
+		got  contract.TModelFit
+		want string
+	}{{gpu, "success"}, {ok, "success"}, {tight, "warning"}, {no, "error"}} {
+		if c.got.FitTone != c.want {
+			t.Fatalf("tom %q esperado para %q, obtido %q", c.want, c.got.FitLabel, c.got.FitTone)
+		}
 	}
 	if no.RequiredLabel == "" {
 		t.Fatalf("rotulo de memoria necessaria vazio: %+v", no)

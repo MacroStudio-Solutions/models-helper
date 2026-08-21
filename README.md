@@ -55,7 +55,7 @@ justamente o que o contrato autoriza.
 ## Regras de comportamento
 
 - **Veredito pronto no dado**: `fitOk`, `fitTight`, `fitGpu`, `fitRank`,
-  `fitLabel` e `requiredBytes` chegam calculados em todo item de catálogo e de
+  `fitLabel`, `fitTone` e `requiredBytes` chegam calculados em todo item de catálogo e de
   inventário; o consumidor não compara números nem encadeia condições. A
   fórmula de linguagem é peso × 1,2 + margem de KV-cache de 1,5 GiB contra RAM
   disponível + VRAM. A de fala (`--speech`) usa margem de 512 MiB e ignora

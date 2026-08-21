@@ -59,15 +59,19 @@ func Describe(f contract.TModelFit) contract.TModelFit {
 	case f.FitGpu:
 		f.FitRank = contract.FitRankGpu
 		f.FitLabel = "roda na GPU"
+		f.FitTone = "success"
 	case f.FitOk:
 		f.FitRank = contract.FitRankOk
 		f.FitLabel = "roda bem"
+		f.FitTone = "success"
 	case f.FitTight:
 		f.FitRank = contract.FitRankTight
 		f.FitLabel = "no limite"
+		f.FitTone = "warning"
 	default:
 		f.FitRank = contract.FitRankNo
 		f.FitLabel = "não recomendado"
+		f.FitTone = "error"
 	}
 	return f
 }
