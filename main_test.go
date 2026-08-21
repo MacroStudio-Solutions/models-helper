@@ -994,3 +994,43 @@ func TestParakeetAloneIsNotServable(t *testing.T) {
 		t.Fatalf("peso de parakeet mal classificado: %v", item)
 	}
 }
+
+// O flag da biblioteca padrao para de ler opcoes no primeiro posicional, entao
+// `catalog search <termo> --sort fit` chegava com tres posicionais e nenhuma
+// opcao lida. Foi como a busca da tela falhou na primeira validacao pela
+// interface.
+func TestCatalogAcceptsFlagsAfterThePositional(t *testing.T) {
+	setupRoot(t)
+	newFakeHub(t, map[string]uint64{"tiny-Q4_K_M.gguf": 1000})
+
+	r := runHelper(t, "catalog", "search", "tiny", "--sort", "fit", "--fit", "fits", "--limit", "12")
+	if r.ExitCode != 0 || r.Env["ok"] != true {
+		t.Fatalf("opcao depois do termo deveria ser lida: %s / %s", r.Stdout, r.Stderr)
+	}
+	if len(dataList(t, r)) == 0 {
+		t.Fatalf("busca vazia: %s", r.Stdout)
+	}
+
+	r = runHelper(t, "catalog", "versions", "org/tiny", "--sort", "size", "--limit", "24")
+	if r.ExitCode != 0 || r.Env["ok"] != true {
+		t.Fatalf("versions com opcao depois do repo: %s / %s", r.Stdout, r.Stderr)
+	}
+
+	// A ordem inversa continua valendo.
+	r = runHelper(t, "catalog", "search", "--limit", "5", "tiny")
+	if r.ExitCode != 0 || r.Env["ok"] != true {
+		t.Fatalf("opcao antes do termo: %s", r.Stdout)
+	}
+
+	// Dois posicionais continuam sendo uso invalido.
+	r = runHelper(t, "catalog", "search", "tiny", "extra")
+	if r.ExitCode == 0 || errCode(t, r) != "INVALID_USAGE" {
+		t.Fatalf("dois termos deveriam ser recusados: %s", r.Stdout)
+	}
+
+	// E o subcomando sem posicional continua recusando um.
+	r = runHelper(t, "catalog", "curated", "sobra")
+	if r.ExitCode == 0 || errCode(t, r) != "INVALID_USAGE" {
+		t.Fatalf("curated nao aceita posicional: %s", r.Stdout)
+	}
+}

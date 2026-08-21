@@ -70,6 +70,28 @@ func parse(fs *flag.FlagSet, args []string) *contract.THelperError {
 	return nil
 }
 
+// parsePositional aceita opcao depois do argumento posicional.
+//
+// O flag da biblioteca padrao para de interpretar opcoes no primeiro argumento
+// que nao comeca com traco, entao `catalog search qwen --sort fit` chegaria com
+// tres posicionais e nenhuma opcao lida — falha silenciosa que so aparece como
+// uso invalido. O laco reinicia a leitura depois de cada posicional, que e a
+// permutacao que o getopt de outras linguagens faz sozinho.
+func parsePositional(fs *flag.FlagSet, args []string) ([]string, *contract.THelperError) {
+	positional := []string{}
+	rest := args
+	for {
+		if herr := parse(fs, rest); herr != nil {
+			return nil, herr
+		}
+		if fs.NArg() == 0 {
+			return positional, nil
+		}
+		positional = append(positional, fs.Arg(0))
+		rest = fs.Args()[1:]
+	}
+}
+
 func clampLimit(n int) int {
 	if n < 1 {
 		return 1
@@ -154,7 +176,8 @@ func runCatalog(args []string) int {
 		return 1
 	}
 	view := catalogViewFlags(fs, defaultLimit, defaultSort)
-	if herr := parse(fs, rest); herr != nil {
+	positional, herr := parsePositional(fs, rest)
+	if herr != nil {
 		emit(nil, herr)
 		return 1
 	}
@@ -164,7 +187,7 @@ func runCatalog(args []string) int {
 	}
 
 	wantsTerm := sub == "search" || sub == "versions"
-	if wantsTerm && fs.NArg() != 1 {
+	if wantsTerm && len(positional) != 1 {
 		usage := "uso: catalog search <termo> [opcoes]"
 		if sub == "versions" {
 			usage = "uso: catalog versions <repo> [opcoes]"
@@ -172,7 +195,7 @@ func runCatalog(args []string) int {
 		emit(nil, contract.Errorf("INVALID_USAGE", "%s", usage))
 		return 1
 	}
-	if !wantsTerm && fs.NArg() > 0 {
+	if !wantsTerm && len(positional) > 0 {
 		emit(nil, contract.Errorf("INVALID_USAGE", "catalog %s nao aceita argumentos posicionais", sub))
 		return 1
 	}
@@ -196,16 +219,16 @@ func runCatalog(args []string) int {
 		}
 		entries = catalog.DefaultEntries(ctx, client, models, profile, modelsDir)
 	case "search":
-		models, err := client.Search(ctx, fs.Arg(0), clampLimit(view.limit*2))
+		models, err := client.Search(ctx, positional[0], clampLimit(view.limit*2))
 		if err != nil {
 			emit(nil, asHelperError(err))
 			return 1
 		}
 		entries = catalog.DefaultEntries(ctx, client, models, profile, modelsDir)
 	case "versions":
-		found, herr := catalog.VersionEntries(ctx, client, fs.Arg(0), profile, modelsDir)
-		if herr != nil {
-			emit(nil, herr)
+		found, verr := catalog.VersionEntries(ctx, client, positional[0], profile, modelsDir)
+		if verr != nil {
+			emit(nil, verr)
 			return 1
 		}
 		entries = found
